@@ -64,8 +64,9 @@ class UpdateLineItemCommand extends Command
 
 
             //GET ALL LINE ITEM DATA OF LAST 5 MINUTE AND STORE INTO ONE GLOBAL VARIABLE
-            $_5mintAgoTime = now()->subMinutes(4)->toIso8601String(); //TODO : UPDATE WITH 4 MIN
-            $this->getLineItems($_5mintAgoTime);
+            $_5mintAgoTimeIso = now()->subMinutes(4)->toIso8601String();
+            $_5mintAgoTimeTimeStamp = now()->subMinutes(4)->timestamp;
+            $this->getLineItems($_5mintAgoTimeIso, $_5mintAgoTimeTimeStamp);
 
 
             //FLATTEN ALL LINE ITEMS
@@ -82,7 +83,7 @@ class UpdateLineItemCommand extends Command
                 $rawData['acv_combined'] = $this->acvCombined($lineItemProperty);
                 $rawData['weighted_value'] =$this->weightAndForecast($lineItemProperty);
                 $rawData['price_in_company_currency'] = $this->acvInCompanyCurrency($lineItemProperty);
-                $rawData['custom_updated_time'] = now()->toIso8601String();
+                $rawData['custom_updated_time'] = now()->timestamp;
 
                 $payload = [
                     "properties" => $rawData
@@ -97,11 +98,12 @@ class UpdateLineItemCommand extends Command
     }
 
     /**
-     * @param $_5mintAgoTime
+     * @param $_5mintAgoTimeIso
+     * @param $_5mintAgoTimeTimeStamp
      * @param int $after
      * @return void
      */
-    public function getLineItems($_5mintAgoTime, int $after = 0)
+    public function getLineItems($_5mintAgoTimeIso, $_5mintAgoTimeTimeStamp, int $after = 0)
     {
         try {
             $payload = [
@@ -128,7 +130,7 @@ class UpdateLineItemCommand extends Command
                         "filters" => [
                             [
                                 "propertyName" => "hs_lastmodifieddate",
-                                "value"        => $_5mintAgoTime,
+                                "value"        => $_5mintAgoTimeIso,
                                 "operator"     => "GT"
                             ],
                             [
@@ -138,7 +140,7 @@ class UpdateLineItemCommand extends Command
                             ],
                             [
                                 "propertyName" => "custom_updated_time",
-                                "value"        => $_5mintAgoTime,
+                                "value"        => $_5mintAgoTimeTimeStamp,
                                 "operator"     => "LT"
                             ],
                         ]
@@ -162,7 +164,7 @@ class UpdateLineItemCommand extends Command
 
                 if (isset($response->json()["paging"])){
                     $after = (int)($response->json()["paging"]["next"]["after"]);
-                    $this->getLineItems($_5mintAgoTime, $after);
+                    $this->getLineItems($_5mintAgoTimeIso, $_5mintAgoTimeTimeStamp, $after);
                 }
             }
         }catch (Exception $e){
