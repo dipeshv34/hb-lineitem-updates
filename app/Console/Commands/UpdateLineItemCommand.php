@@ -92,7 +92,7 @@ class UpdateLineItemCommand extends Command
                 $this->updateLineItem($lineItem["id"], $payload);
             }
         }catch (Exception $e){
-            dd($e);
+            Log::error("UpdateLineItemCommand Exception $e");
         }
     }
 
