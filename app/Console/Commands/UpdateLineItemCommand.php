@@ -14,6 +14,10 @@ use Illuminate\Support\Facades\Log;
 class UpdateLineItemCommand extends Command
 {
     protected mixed $lineItems = [];
+    public mixed $gbpRate;
+    public mixed $usdRate;
+    public mixed $brlRate;
+    public mixed $eurRate;
     /**
      * The name and signature of the console command.
      *
@@ -27,10 +31,6 @@ class UpdateLineItemCommand extends Command
      * @var string
      */
     protected $description = 'This command update a line item with new calculation';
-    public $gbpRate;
-public $usdRate;
-public $brlRate;
-public $eurRate;
 
     /**
      * Execute the console command.
@@ -64,7 +64,7 @@ public $eurRate;
 
 
             //GET ALL LINE ITEM DATA OF LAST 5 MINUTE AND STORE INTO ONE GLOBAL VARIABLE
-            $_5mintAgoTime = now()->subMinutes(4); //TODO : UPDATE WITH 4 MIN
+            $_5mintAgoTime = now()->subMinutes(4)->toIso8601String(); //TODO : UPDATE WITH 4 MIN
             $this->getLineItems($_5mintAgoTime);
 
 
@@ -82,6 +82,7 @@ public $eurRate;
                 $rawData['acv_combined'] = $this->acvCombined($lineItemProperty);
                 $rawData['weighted_value'] =$this->weightAndForecast($lineItemProperty);
                 $rawData['price_in_company_currency'] = $this->acvInCompanyCurrency($lineItemProperty);
+                $rawData['custom_updated_time'] = now()->toIso8601String();
 
                 $payload = [
                     "properties" => $rawData
@@ -135,6 +136,11 @@ public $eurRate;
                                 "value"        => "Open",
                                 "operator"     => "EQ"
                             ],
+                            [
+                                "propertyName" => "custom_updated_time",
+                                "value"        => $_5mintAgoTime,
+                                "operator"     => "LT"
+                            ],
                         ]
                     ]
                 ],
@@ -172,14 +178,15 @@ public $eurRate;
     public function updateLineItem($lineItemId, $payload)
     {
         try {
-            Log::info('Update Line Item Id :- '.$lineItemId);
-           $re= Http::withHeaders([
-                "Authorization" => "Bearer ".env('HUBSPOT_KEY'),
-                "content-type" => "application/json"
+            Log::info("updated item id :- $lineItemId");
+            $res = Http::withHeaders([
+                "Authorization" => "Bearer " . env('HUBSPOT_KEY'),
+                "content-type"  => "application/json"
             ])->patch("https://api.hubapi.com/crm/v3/objects/line_items/$lineItemId", $payload);
-           dd($re);
-        }catch (Exception $e){
-            Log::info('updateLineItem Exception :- ', [$lineItemId, $e]);
+            Log::info('updated line item :- ', [$res->json()]);
+        }
+        catch (Exception $e) {
+            Log::info('updateLineItem Exception :- ', [$lineItemId,$e]);
         }
     }
 
@@ -218,7 +225,7 @@ public $eurRate;
         $acvCompanyCurrency = $lineItem['acv_combined'];
 
         if ($acvCompanyCurrency >= 0) {
-            $weightValue = 1 * $lineItem['price_in_company_currency'];
+            $weightValue = $lineItem['forecast_weight'] * $lineItem['price_in_company_currency'];
         }
 
         if ($acvCompanyCurrency=="" || $acvCompanyCurrency==" " || $acvCompanyCurrency=="null" || empty($acvCompanyCurrency)){
@@ -243,12 +250,5 @@ public $eurRate;
         }
 
         return $acvInCompanyCurrency;
-    }
-
-    private function formulaUpdateTime()
-    {
-        return [
-          "formula_update_time" => now(),
-        ];
     }
 }
