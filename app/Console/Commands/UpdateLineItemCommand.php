@@ -27,38 +27,71 @@ class UpdateLineItemCommand extends Command
      * @var string
      */
     protected $description = 'This command update a line item with new calculation';
+    public $gbpRate;
+public $usdRate;
+public $brlRate;
+public $eurRate;
 
     /**
      * Execute the console command.
      */
     public function handle()
     {
-        //GET ALL LINE ITEM DATA OF LAST 5 MINUTE AND STORE INTO ONE GLOBAL VARIABLE
-        $_5mintAgoTime = now()->subDays(4); //TODO : UPDATE WITH 4 MIN
-        $this->getLineItems($_5mintAgoTime);
+        try {
 
-        //FLATTEN ALL LINE ITEMS
-        $this->lineItems = Arr::flatten($this->lineItems, 1);
 
-        //LOOP ON EACH LINE ITEMS AND UPDATE IT
-        foreach ($this->lineItems as $lineItem){
-            $rawData = [];
-            $lineItemProperty = $lineItem["properties"];
+            $url = 'https://tassidicambio.bancaditalia.it/terzevalute-wf-web/rest/v1.0/latestRates?lang=en';
 
-            if ($lineItemProperty['opt_out'] == "Yes" || $lineItemProperty['opt_out']=="true"){
-                $rawData = $this->optOutAcv($lineItemProperty);
+            $headers = array(
+                'Content-Type: application/json',
+                'Accept: application/json',
+                'Cookie: TS01d56941=011612bbe971772c1151f4f7694f8194413033bc9eb7ee896aab9234f54bc46ccfbcca818ef82635119943081ad6fa8317fb8e1864'
+            );
+
+            $ch = curl_init($url);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+
+            $response = curl_exec($ch);
+            curl_close($ch);
+
+            $res = json_decode($response, 2);
+            $rates = $res['latestRates'];
+            $this->gbpRate = collect($rates)->where('isoCode', 'GBP')->value('eurRate');
+            $this->usdRate = collect($rates)->where('isoCode', 'USD')->value('eurRate');
+            $this->brlRate = collect($rates)->where('isoCode', 'BRL')->value('eurRate');
+            $this->eurRate = collect($rates)->where('isoCode', 'EUR')->value('eurRate');
+
+
+            //GET ALL LINE ITEM DATA OF LAST 5 MINUTE AND STORE INTO ONE GLOBAL VARIABLE
+            $_5mintAgoTime = now()->subMinutes(4); //TODO : UPDATE WITH 4 MIN
+            $this->getLineItems($_5mintAgoTime);
+
+
+            //FLATTEN ALL LINE ITEMS
+            $this->lineItems = Arr::flatten($this->lineItems, 1);
+
+            //LOOP ON EACH LINE ITEMS AND UPDATE IT
+            foreach ($this->lineItems as $lineItem) {
+                $rawData = [];
+                $lineItemProperty = $lineItem["properties"];
+
+                if ($lineItemProperty['opt_out'] == "Yes" || $lineItemProperty['opt_out'] == "true") {
+                    $rawData['opt_out_acv'] = $this->optOutAcv($lineItemProperty);
+                }
+                $rawData['acv_combined'] = $this->acvCombined($lineItemProperty);
+                $rawData['weighted_value'] =$this->weightAndForecast($lineItemProperty);
+                $rawData['price_in_company_currency'] = $this->acvInCompanyCurrency($lineItemProperty);
+
+                $payload = [
+                    "properties" => $rawData
+                ];
+
+                //UPDATE A LINE ITEM
+                $this->updateLineItem($lineItem["id"], $payload);
             }
-            $rawData = [$this->acvCombined($lineItemProperty), ...$rawData];
-            $rawData = [$this->weightAndForecast($lineItemProperty), ...$rawData];
-            $rawData = [$this->acvInCompanyCurrency($lineItemProperty), ...$rawData];
-            $rawData = [$this->formulaUpdateTime(), ...$rawData];
-
-            $payload = [
-                "properties" => $rawData
-            ];
-
-            //UPDATE A LINE ITEM
-            $this->updateLineItem($lineItem["id"], $payload);
+        }catch (Exception $e){
+            dd($e);
         }
     }
 
@@ -77,6 +110,8 @@ class UpdateLineItemCommand extends Command
                     "hs_lastmodifieddate"
                 ],
                 "properties"   => [
+                    "opt_out",
+                    "hs_acv",
                     "ramp_acv_exchange_rate",
                     "opt_out_window",
                     "price_in_company_currency",
@@ -96,10 +131,10 @@ class UpdateLineItemCommand extends Command
                                 "operator"     => "GT"
                             ],
                             [
-                                "propertyName" => "custom_updated_time",
-                                "value"        => "2024-01-28",
-                                "operator"     => "GT"
-                            ]
+                                "propertyName" => "deal_status",
+                                "value"        => "Open",
+                                "operator"     => "EQ"
+                            ],
                         ]
                     ]
                 ],
@@ -114,7 +149,6 @@ class UpdateLineItemCommand extends Command
                 "content-type" => "application/json"
             ])->post('https://api.hubapi.com/crm/v3/objects/line_items/search', $payload);
 
-            dd($response->json());
 
             if ($response->ok()){
                 $resData = $response->json()["results"];
@@ -139,10 +173,11 @@ class UpdateLineItemCommand extends Command
     {
         try {
             Log::info('Update Line Item Id :- '.$lineItemId);
-            Http::withHeaders([
+           $re= Http::withHeaders([
                 "Authorization" => "Bearer ".env('HUBSPOT_KEY'),
                 "content-type" => "application/json"
             ])->patch("https://api.hubapi.com/crm/v3/objects/line_items/$lineItemId", $payload);
+           dd($re);
         }catch (Exception $e){
             Log::info('updateLineItem Exception :- ', [$lineItemId, $e]);
         }
@@ -150,10 +185,14 @@ class UpdateLineItemCommand extends Command
 
     private function optOutAcv($lineItem)
     {
-        $optOutAcv = floatval($lineItem["ramp_acv_exchange_rate"])*(100-floatval($lineItem["opt_out_window"]));
-        return [
-            "opt_out_acv" => $optOutAcv
-        ];
+        $ramp_acv_exchange_rate=$lineItem["ramp_acv_exchange_rate"] ?? null;
+        if ($ramp_acv_exchange_rate=="alpha" || $ramp_acv_exchange_rate==0 || $ramp_acv_exchange_rate=="" ||
+            $ramp_acv_exchange_rate=="0" || empty($ramp_acv_exchange_rate)){
+            $optOutAcv = floatval($lineItem["price_in_company_currency"])*(100-floatval($lineItem["opt_out_window"]));
+        }else{
+            $optOutAcv = floatval($lineItem["ramp_acv_exchange_rate"])*(100-floatval($lineItem["opt_out_window"]));
+        }
+        return $optOutAcv;
     }
 
     private function acvCombined($lineItem)
@@ -171,9 +210,7 @@ class UpdateLineItemCommand extends Command
             $acv_combined=$lineItem["opt_out_acv"];
         }
 
-        return [
-            "acv_combined" => $acv_combined,
-        ];
+        return  $acv_combined;
     }
 
     private function weightAndForecast($lineItem)
@@ -181,30 +218,31 @@ class UpdateLineItemCommand extends Command
         $acvCompanyCurrency = $lineItem['acv_combined'];
 
         if ($acvCompanyCurrency >= 0) {
-            $weightValue = $lineItem['forecast_weight'] * $lineItem['price_in_company_currency'];
+            $weightValue = 1 * $lineItem['price_in_company_currency'];
         }
 
         if ($acvCompanyCurrency=="" || $acvCompanyCurrency==" " || $acvCompanyCurrency=="null" || empty($acvCompanyCurrency)){
             $weightValue = "";
         }
 
-        return [
-            "weighted_value" => $weightValue
-        ];
+        return $weightValue;
     }
 
     private function acvInCompanyCurrency($lineItem)
     {
         $avc = $lineItem["hs_acv"];
+
         if ($lineItem["line_item_currency"] == "USD") {
-            $acvInCompanyCurrency = floatval($avc) / 1.08082273;
+            $acvInCompanyCurrency = floatval($avc) / $this->usdRate;
+        }elseif($lineItem["line_item_currency"] == "GBP"){
+            $acvInCompanyCurrency = floatval($avc) / $this->gbpRate;
+        }elseif($lineItem["line_item_currency"] == "BRL"){
+            $acvInCompanyCurrency = floatval($avc) / $this->brlRate;
         }else{
-            $acvInCompanyCurrency = floatval($avc) / 0.87045409;
+            $acvInCompanyCurrency = floatval($avc) / $this->eurRate;
         }
 
-        return [
-            "price_in_company_currency" => $acvInCompanyCurrency,
-        ];
+        return $acvInCompanyCurrency;
     }
 
     private function formulaUpdateTime()
