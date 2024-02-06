@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use Carbon\Carbon;
 use Exception;
 use Illuminate\Console\Command;
 use Illuminate\Support\Arr;
@@ -76,6 +77,13 @@ class UpdateLineItemCommand extends Command
             foreach ($this->lineItems as $lineItem) {
                 $rawData = [];
                 $lineItemProperty = $lineItem["properties"];
+                if (!empty($lineItemProperty['custom_updated_time'])){
+                    $lastUpdatedTime = Carbon::parse((int)$lineItemProperty['custom_updated_time'])->timestamp;
+                    if ($lastUpdatedTime >= $_5mintAgoTimeTimeStamp){
+                        Log::info('skip last updated time :- '.$lastUpdatedTime);
+                        continue;
+                    }
+                }
 
                 if ($lineItemProperty['opt_out'] == "Yes" || $lineItemProperty['opt_out'] == "true") {
                     $rawData['opt_out_acv'] = $this->optOutAcv($lineItemProperty);
@@ -137,12 +145,7 @@ class UpdateLineItemCommand extends Command
                                 "propertyName" => "deal_status",
                                 "value"        => "Open",
                                 "operator"     => "EQ"
-                            ],
-                            [
-                                "propertyName" => "custom_updated_time",
-                                "value"        => $_5mintAgoTimeTimeStamp,
-                                "operator"     => "LT"
-                            ],
+                            ]
                         ]
                     ]
                 ],
